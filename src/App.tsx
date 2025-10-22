@@ -1,15 +1,36 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/Addons.js";
 import { components } from "./components/ComponentsManager";
 import { HelloWorldComponents } from "./components/HelloWorldComponent";
 import { SettingsButton } from "./components/SettingsButton";
+import { Toolbar } from "./components/Toolbar";
+import { LayerManager } from "./components/LayerManager";
 
 import "./App.css";
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [scene, setScene] = useState<THREE.Scene | null>(null);
+  const [camera, setCamera] = useState<THREE.Camera | null>(null);
+  const [renderer, setRenderer] = useState<THREE.WebGLRenderer | null>(null);
+  const [activeTool, setActiveTool] = useState<string>('select');
+  const [layers, setLayers] = useState<any[]>([]);
+  const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
+
+  // Reusable style for property items
+  const propertyItemStyle = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '8px 15px',
+    borderBottom: '1px solid #3c3c3c',
+    fontSize: '13px',
+    ':hover': {
+      backgroundColor: '#3c3c3c'
+    }
+  };
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -17,6 +38,7 @@ export default function App() {
     // === Scene setup ===
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x202025);
+    setScene(scene);
 
     const near = 5;
     const far = 15;
@@ -30,12 +52,14 @@ export default function App() {
       1000
     );
     camera.position.set(5, 5, 5);
+    setCamera(camera);
 
     const renderer = new THREE.WebGLRenderer({ 
       canvas: canvasRef.current,
       antialias: true,
       alpha: true
     });
+    setRenderer(renderer);
     
     // Set initial size
     const updateSize = () => {
@@ -228,61 +252,208 @@ export default function App() {
             display: 'block'
           }}
         />
+        {scene && camera && renderer && (
+          <Toolbar 
+            scene={scene} 
+            camera={camera} 
+            renderer={renderer}
+            onToolChange={(tool) => setActiveTool(tool)}
+          />
+        )}
       </div>
 
-      {/* Right Sidebar - Properties */}
+      {/* Right Sidebar - Properties and Layers */}
       <div style={{
         gridArea: 'right',
         backgroundColor: '#252526',
         borderLeft: '1px solid #3c3c3c',
-        padding: '15px',
-        overflowY: 'auto',
-        color: 'white'
+        color: 'white',
+        display: 'flex',
+        flexDirection: 'column',
+        width: '300px',
+        minWidth: '300px'
       }}>
-        <h3 style={{ margin: '0 0 15px 0', color: '#9e9e9e' }}>Properties</h3>
-        
-        {/* Selected Object Section */}
+        {/* Layers Section */}
         <div style={{
-          backgroundColor: '#2d2d2d',
-          padding: '12px',
-          borderRadius: '4px',
-          marginBottom: '15px'
+          borderBottom: '1px solid #3c3c3c',
+          padding: '15px'
         }}>
-          <div style={{ color: '#9e9e9e', fontSize: '0.9em', marginBottom: '8px' }}>Selected Object</div>
-          <div>None selected</div>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '10px'
+          }}>
+            <h3 style={{ margin: 0, color: '#9e9e9e', fontSize: '14px', fontWeight: 'normal' }}>LAYERS</h3>
+            <button 
+              onClick={() => {}}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#9e9e9e',
+                cursor: 'pointer',
+                fontSize: '16px',
+                padding: '0 5px',
+                transition: 'color 0.2s'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.color = '#fff'}
+              onMouseOut={(e) => e.currentTarget.style.color = '#9e9e9e'}
+              title="Add Layer"
+            >
+              +
+            </button>
+          </div>
+          
+          {scene && (
+            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              <LayerManager 
+                scene={scene}
+                onLayerChange={(updatedLayers) => {
+                  setLayers(updatedLayers);
+                  if (updatedLayers.length > 0 && !activeLayerId) {
+                    setActiveLayerId(updatedLayers[0].id);
+                  }
+                }}
+              />
+            </div>
+          )}
         </div>
         
-        {/* Display Settings */}
-        <div style={{ marginTop: '20px' }}>
-          <h4 style={{ color: '#9e9e9e', marginBottom: '10px' }}>Display Settings</h4>
-          
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            marginBottom: '10px'
+        {/* Properties Section */}
+        <div style={{
+          flex: 1,
+          padding: '15px',
+          overflowY: 'auto'
+        }}>
+          <h3 style={{ 
+            margin: '0 0 15px 0', 
+            color: '#9e9e9e',
+            fontSize: '14px',
+            fontWeight: 'normal',
+            textTransform: 'uppercase'
           }}>
-            <span>Grid</span>
-            <label className="switch">
-              <input type="checkbox" defaultChecked />
-              <span className="slider"></span>
-            </label>
+            Properties
+          </h3>
+          
+          <div style={{
+            backgroundColor: '#2d2d2d',
+            borderRadius: '4px',
+            overflow: 'hidden',
+            marginBottom: '15px'
+          }}>
+            <div style={{
+              padding: '10px 15px',
+              backgroundColor: '#3c3c3c',
+              color: '#e0e0e0',
+              fontSize: '13px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <span>Selected Object</span>
+              <span style={{ color: '#9e9e9e' }}>None</span>
+            </div>
+            
+            <div style={{ padding: '10px 15px' }}>
+              <div style={propertyItemStyle}>
+                <span>Visible</span>
+                <label className="switch">
+                  <input type="checkbox" defaultChecked />
+                  <span className="slider"></span>
+                </label>
+              </div>
+              
+              <div style={propertyItemStyle}>
+                <span>Locked</span>
+                <label className="switch">
+                  <input type="checkbox" />
+                  <span className="slider"></span>
+                </label>
+              </div>
+              
+              <div style={propertyItemStyle}>
+                <span>Opacity</span>
+                <span style={{ color: '#9e9e9e' }}>100%</span>
+              </div>
+            </div>
           </div>
           
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            marginBottom: '10px'
-          }}>
-            <span>Axes</span>
-            <label className="switch">
-              <input type="checkbox" defaultChecked />
-              <span className="slider"></span>
-            </label>
+          {/* Display Settings */}
+          <div>
+            <div style={{
+              padding: '10px 15px',
+              backgroundColor: '#3c3c3c',
+              color: '#e0e0e0',
+              fontSize: '13px',
+              marginBottom: '10px',
+              borderRadius: '4px'
+            }}>
+              Display Settings
+            </div>
+            
+            <div style={{
+              backgroundColor: '#2d2d2d',
+              borderRadius: '4px',
+              overflow: 'hidden'
+            }}>
+              <div style={propertyItemStyle}>
+                <span>Grid</span>
+                <label className="switch">
+                  <input type="checkbox" defaultChecked />
+                  <span className="slider"></span>
+                </label>
+              </div>
+              
+              <div style={propertyItemStyle}>
+                <span>Axes</span>
+                <label className="switch">
+                  <input type="checkbox" defaultChecked />
+                  <span className="slider"></span>
+                </label>
+              </div>
+              
+              <div style={propertyItemStyle}>
+                <span>Shadows</span>
+                <label className="switch">
+                  <input type="checkbox" defaultChecked />
+                  <span className="slider"></span>
+                </label>
+              </div>
+            </div>
           </div>
+        </div>
+        
+        {/* Status bar */}
+        <div style={{
+          padding: '8px 15px',
+          borderTop: '1px solid #3c3c3c',
+          fontSize: '11px',
+          color: '#9e9e9e',
+          display: 'flex',
+          justifyContent: 'space-between',
+          backgroundColor: '#2d2d2d'
+        }}>
+          <div>Ready</div>
+          <div>Layers: {layers.length}</div>
         </div>
       </div>
+      
+      <style>{`
+        .property-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 8px 15px;
+          border-bottom: 1px solid #3c3c3c;
+          font-size: 13px;
+        }
+        .property-item:last-child {
+          border-bottom: none;
+        }
+        .property-item:hover {
+          background-color: #3c3c3c;
+        }
+      `}</style>
 
       {/* Footer */}
       <div style={{
