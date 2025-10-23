@@ -1,44 +1,101 @@
 import * as THREE from 'three';
 
+/**
+ * Mendefinisikan tipe-tipe objek yang dapat digambar dan dikelola oleh riwayat (undo/redo).
+ * Bisa berupa garis (Line) atau mesh 3D (Mesh).
+ */
 type DrawableObject = THREE.Line | THREE.Mesh;
 
-interface ExtrudeSettings extends THREE.ExtrudeGeometryOptions {
-  steps?: number;
-  depth?: number;
-  bevelEnabled?: boolean;
-}
+/**
+ * Memperluas antarmuka standar THREE.ExtrudeGeometryOptions dengan properti opsional untuk kejelasan.
+ */
 
+/**
+ * Sebuah alat untuk menggambar polyline di scene THREE.js, yang kemudian diekstrusi menjadi mesh 3D.
+ * Alat ini menangani klik mouse untuk menempatkan titik, menampilkan pratinjau segmen garis berikutnya,
+ * dan menyelesaikan bentuk saat terjadi double-click. Alat ini juga mendukung fungsionalitas undo/redo.
+ */
 export class LineTool {
-  private isDrawing = false;
-  private points: THREE.Vector3[] = [];
-  private currentLine: THREE.Line | null = null;
-  private scene: THREE.Scene;
-  private camera: THREE.Camera;
-  private renderer: THREE.WebGLRenderer;
-  private onCancel: (() => void) | null = null;
-  private history: DrawableObject[] = [];
-  private historyIndex: number = -1;
-  private tempLines: THREE.Line[] = [];
-  private doubleClickTimer: number | null = null;
-  private clickCount = 0;
-  private currentMesh: THREE.Mesh | null = null;
+  /** Jumlah maksimum titik yang dapat ditampung oleh sebuah polyline sebelum buffer perlu dialokasi ulang. */
+  private readonly MAX_POINTS = 1000;
 
-  constructor(scene: THREE.Scene, camera: THREE.Camera, renderer: THREE.WebGLRenderer, onCancel: () => void) {
+  /** Sebuah flag untuk menandakan apakah pengguna sedang dalam proses menggambar polyline. */
+  private isDrawing = false;
+  /** Sebuah array untuk menyimpan vertex (titik) dari polyline yang sedang digambar. */
+  private points: THREE.Vector3[] = [];
+  /** Objek THREE.Line yang merepresentasikan polyline yang sedang digambar saat ini. */
+  private currentLine: THREE.Line | null = null;
+  /** Scene utama THREE.js tempat semua objek dirender. */
+  private scene: THREE.Scene;
+  /** Kamera yang digunakan untuk raycasting guna menentukan posisi 3D dari klik mouse. */
+  private camera: THREE.Camera;
+  /** Renderer WebGL, digunakan untuk mendapatkan elemen canvas untuk event listener. */
+  private renderer: THREE.WebGLRenderer;
+  /** Sebuah fungsi callback yang dipanggil ketika proses menggambar dibatalkan (misalnya, dengan menekan Esc). */
+  private onCancel: (() => void) | null = null;
+  /** Sebuah array yang menyimpan riwayat mesh yang telah dibuat untuk operasi undo/redo. */
+  private history: DrawableObject[] = [];
+  /** Indeks saat ini di dalam array riwayat, menunjuk ke objek terakhir yang dibuat. */
+  private historyIndex: number = -1;
+  /** Sebuah array untuk menampung garis sementara, seperti garis pratinjau yang mengikuti kursor mouse. */
+  private tempLines: THREE.Line[] = [];
+  
+  /** Kontrol kamera untuk menonaktifkan/mengaktifkan saat menggambar */
+  private controls?: {
+    enabled: boolean;
+  };
+  
+  /** Menyimpan status awal kontrol kamera */
+  private originalControlsEnabled: boolean = true;
+  /** Sebuah timer untuk membantu membedakan antara klik tunggal dan klik ganda. */
+  private doubleClickTimer: number | null = null;
+  /** Sebuah penghitung untuk klik mouse guna mendeteksi klik ganda. */
+  private clickCount = 0;
+  /** Menyimpan mesh yang paling baru dibuat, meskipun tidak digunakan secara aktif di versi ini. */
+
+  /**
+   * Membuat instance LineTool.
+   * @param scene Scene THREE.js untuk menggambar.
+   * @param camera Kamera THREE.js untuk perhitungan koordinat.
+   * @param renderer Renderer THREE.js untuk melampirkan event listener.
+   * @param onCancel Fungsi callback untuk dieksekusi saat gambar dibatalkan.
+   * @param controls Kontrol untuk mengaktifkan atau menonaktifkan kontrol.
+   */
+  constructor(
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    renderer: THREE.WebGLRenderer,
+    onCancel: () => void,
+    controls?: {
+      enabled: boolean;
+    }
+  ) {
     this.scene = scene;
     this.camera = camera;
     this.renderer = renderer;
+    this.controls = controls;
     this.onCancel = onCancel;
   }
 
+  /**
+   * Menangani event keydown. Jika tombol 'Escape' ditekan saat menggambar, proses akan dibatalkan.
+   * @param event Objek KeyboardEvent.
+   */
   private handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape' && this.isDrawing) {
       this.cancelDrawing();
     }
   };
 
+  /**
+   * Membatalkan operasi menggambar saat ini. Menghapus garis sementara, mereset status,
+   * dan memanggil callback onCancel.
+   */
   private cancelDrawing() {
     if (this.currentLine) {
       this.scene.remove(this.currentLine);
+      this.currentLine.geometry.dispose();
+      (this.currentLine.material as THREE.Material).dispose();
     }
     this.clearTempLines();
     this.resetDrawing();
@@ -48,85 +105,102 @@ export class LineTool {
     }
   }
 
+  /**
+   * Menghitung titik potong (intersection) 3D di dalam scene berdasarkan koordinat mouse 2D.
+   * @param event Objek MouseEvent yang berisi koordinat clientX dan clientY.
+   * @returns Sebuah THREE.Vector3 yang merepresentasikan titik potong, atau null jika tidak ditemukan.
+   */
   private getIntersectionPoint(event: MouseEvent): THREE.Vector3 | null {
     const mouse = new THREE.Vector2();
     const rect = this.renderer.domElement.getBoundingClientRect();
     
-    // Calculate mouse position in normalized device coordinates
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-    // Create a raycaster and set it to point from the camera through the mouse position
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, this.camera);
 
-    // If we have existing points, create a plane that's perpendicular to the camera
-    // and goes through the last point
-    if (this.points.length > 0 && this.isDrawing) {
-      const lastPoint = this.points[this.points.length - 1];
-      const cameraDirection = this.camera.getWorldDirection(new THREE.Vector3());
-      
-      // Create a plane that's perpendicular to the camera's view direction
-      // and goes through the last point
-      const plane = new THREE.Plane();
-      plane.setFromNormalAndCoplanarPoint(cameraDirection, lastPoint);
-      
-      const intersection = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(plane, intersection)) {
-        return intersection;
-      }
-    }
+    // Always use a fixed ground plane at y=0 for rectangle drawing
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const intersection = new THREE.Vector3();
     
-    // Fallback: intersect with a plane at the average height of existing points
-    // or at y=0 if no points exist yet
-    const avgY = this.points.length > 0 
-      ? this.points.reduce((sum, p) => sum + p.y, 0) / this.points.length 
-      : 0;
-      
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -avgY);
-    const groundIntersection = new THREE.Vector3();
-    
-    if (raycaster.ray.intersectPlane(groundPlane, groundIntersection)) {
-      return groundIntersection;
+    if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
+      // Snap to ground plane at y=0
+      intersection.y = 0;
+      return intersection;
     }
     
     return null;
   }
 
+  /**
+   * Fungsi bantuan untuk membuat objek THREE.Line sederhana, biasanya untuk garis pratinjau.
+   * @param points Sebuah array dari titik THREE.Vector3.
+   * @returns Sebuah objek THREE.Line.
+   */
   private createLine(points: THREE.Vector3[]): THREE.Line {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({ 
-      color: 0x00ff00, 
-      linewidth: 2 
+      color: 0xffffff,  // White color for all lines
+      linewidth: 1.5,
+      transparent: true,
+      opacity: 0.9
     });
-    return new THREE.Line(geometry, material);
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 1; // Ensure lines are rendered on top
+    return line;
   }
 
+  /**
+   * Menangani satu kali klik mouse. Ini bisa memulai polyline baru atau menambahkan titik ke polyline yang ada.
+   * @param point Titik 3D tempat klik terjadi.
+   */
   private handleSingleClick = (point: THREE.Vector3) => {
     if (!this.isDrawing) {
-      // Start new polyline
+      // Klik pertama: Mulai gambar baru.
       this.isDrawing = true;
       this.points = [point.clone()];
-      this.currentLine = this.createLine([...this.points]);
-      this.scene.add(this.currentLine);
+
+      // Siapkan objek garis baru dengan buffer yang sudah dialokasikan
+      const geometry = new THREE.BufferGeometry();
+      const positions = new Float32Array(this.MAX_POINTS * 3); // 3 koordinat (x, y, z) per titik
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       
-      // Add preview line
+      const material = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
+      this.currentLine = new THREE.Line(geometry, material);
+      this.currentLine.frustumCulled = false; // Mencegah garis menghilang jika di luar pandangan kamera
+      this.scene.add(this.currentLine);
+
+      // Tambahkan titik pertama ke geometri
+      const positionsAttribute = this.currentLine.geometry.attributes.position as THREE.BufferAttribute;
+      positionsAttribute.setXYZ(0, point.x, point.y, point.z);
+      
+      // Atur draw range untuk menggambar segmen garis pertama (membutuhkan 2 titik)
+      this.currentLine.geometry.setDrawRange(0, 1);
+
+      // Buat garis "pratinjau" yang akan membentang dari titik ini ke kursor mouse.
       const previewLine = this.createLine([point.clone(), point.clone()]);
       this.tempLines.push(previewLine);
       this.scene.add(previewLine);
+
     } else {
-      // Add point to current polyline
+      // Klik berikutnya: Tambahkan titik baru ke polyline saat ini.
       this.points.push(point.clone());
       
-      // Update the existing line geometry
       if (this.currentLine) {
-        this.scene.remove(this.currentLine);
+        const geometry = this.currentLine.geometry as THREE.BufferGeometry;
+        const positions = geometry.attributes.position as THREE.BufferAttribute;
+        const index = this.points.length - 1;
+
+        // Perbarui posisi di dalam buffer
+        positions.setXYZ(index, point.x, point.y, point.z);
+        positions.needsUpdate = true; // Penting! Memberi tahu Three.js bahwa data telah berubah.
+
+        // Perbarui draw range untuk menyertakan titik baru.
+        geometry.setDrawRange(0, this.points.length);
       }
       
-      this.currentLine = this.createLine([...this.points]);
-      this.scene.add(this.currentLine);
-      
-      // Update preview line
+      // Perbarui garis pratinjau agar dimulai dari titik baru.
       this.clearTempLines();
       const previewLine = this.createLine([point.clone(), point.clone()]);
       this.tempLines.push(previewLine);
@@ -134,10 +208,18 @@ export class LineTool {
     }
   };
 
+  /**
+   * Membuat mesh 3D yang diekstrusi dari serangkaian titik 2D pada bidang XZ.
+   * @param points Array dari titik THREE.Vector3 yang membentuk polyline.
+   * @returns Sebuah objek THREE.Mesh, atau null jika titik tidak cukup.
+   */
   private createMeshFromPoints(points: THREE.Vector3[]): THREE.Mesh | null {
     if (points.length < 2) return null;
+
+    // Create a group to hold both the fill and the border
+    const group = new THREE.Group();
     
-    // Create a shape from points
+    // Create a 2D shape from the points
     const shape = new THREE.Shape();
     shape.moveTo(points[0].x, points[0].z);
     
@@ -145,60 +227,93 @@ export class LineTool {
       shape.lineTo(points[i].x, points[i].z);
     }
     
-    // Close the shape if it's not already closed
+    // Close the shape if not already closed
     if (!points[0].equals(points[points.length - 1])) {
       shape.lineTo(points[0].x, points[0].z);
     }
     
-    // Create extrusion settings
-    const extrudeSettings = {
-      steps: 1,
-      depth: 0.1,
-      bevelEnabled: false
-    };
-    
-    // Create geometry and material
-    const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    const material = new THREE.MeshBasicMaterial({ 
-      color: 0x00ff00,
+    // Create fill material (semi-transparent white)
+    const fillMaterial = new THREE.MeshBasicMaterial({ 
+      color: 0xffffff,  // Pure white
+      side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.5,
-      side: THREE.DoubleSide
+      opacity: 0.9,     // 90% opacity
+      depthWrite: false
     });
     
-    // Create and position the mesh
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.y = 0.05; // Slightly above the grid
+    // Create fill mesh (completely flat 2D plane)
+    const fillGeometry = new THREE.ShapeGeometry(shape);
+    const fillMesh = new THREE.Mesh(fillGeometry, fillMaterial);
+    fillMesh.rotation.x = -Math.PI / 2; // Rotate to be flat on XZ plane
+    fillMesh.position.y = 0.001; // Slightly above ground to prevent z-fighting
     
-    return mesh;
+    // Create border using the actual shape points
+    const borderGeometry = new THREE.BufferGeometry();
+    const borderPoints = [];
+    
+    // Add all points for the border
+    for (let i = 0; i <= points.length; i++) {
+      const point = points[i % points.length];
+      borderPoints.push(new THREE.Vector3(point.x, 0.002, point.z));
+    }
+    
+    borderGeometry.setFromPoints(borderPoints);
+    
+    // Create border line with higher render order
+    const borderMaterial = new THREE.LineBasicMaterial({ 
+      color: 0xcccccc,  // Light gray border
+      linewidth: 1.5,
+      transparent: false,
+      opacity: 1.0
+    });
+    
+    const border = new THREE.LineLoop(borderGeometry, borderMaterial);
+    border.renderOrder = 2; // Ensure border is rendered on top
+    
+    // Add both meshes to the group
+    group.add(fillMesh);
+    group.add(border);
+    
+    // Ensure the entire group is flat and properly positioned
+    group.position.y = 0;
+    group.updateMatrix();
+    
+    return group as unknown as THREE.Mesh;
   }
 
+  /**
+   * Menangani klik ganda mouse. Ini akan menyelesaikan polyline, membuat mesh 3D darinya,
+   * dan mereset alat gambar.
+   */
   private handleDoubleClick = () => {
     if (this.isDrawing && this.points.length > 1) {
-      // Create mesh from the polyline
       const mesh = this.createMeshFromPoints(this.points);
       
       if (mesh) {
-        // Add the mesh to the scene
         this.scene.add(mesh);
         
-        // Add to history
         this.history = this.history.slice(0, this.historyIndex + 1);
         this.history.push(mesh);
         this.historyIndex++;
       }
       
-      // Remove the temporary line
+      // Hapus dan buang polyline yang digunakan untuk membuat mesh.
       if (this.currentLine) {
         this.scene.remove(this.currentLine);
+        this.currentLine.geometry.dispose();
+        (this.currentLine.material as THREE.Material).dispose();
       }
       
       this.resetDrawing();
     }
   };
 
+  /**
+   * Event listener untuk event 'mousedown'. Mendeteksi antara klik tunggal dan ganda.
+   * @param event Objek MouseEvent.
+   */
   private onMouseDown = (event: MouseEvent) => {
-    if (event.button !== 0) return; // Only left click
+    if (event.button !== 0) return;
 
     const point = this.getIntersectionPoint(event);
     if (!point) return;
@@ -206,7 +321,6 @@ export class LineTool {
     this.clickCount++;
     
     if (this.clickCount === 1) {
-      // Single click - wait to see if it's a double click
       this.doubleClickTimer = window.setTimeout(() => {
         if (this.clickCount === 1) {
           this.handleSingleClick(point);
@@ -214,7 +328,6 @@ export class LineTool {
         this.clickCount = 0;
       }, 250) as unknown as number;
     } else if (this.clickCount === 2) {
-      // Double click - finish the polyline
       if (this.doubleClickTimer) {
         clearTimeout(this.doubleClickTimer);
       }
@@ -223,13 +336,16 @@ export class LineTool {
     }
   };
 
+  /**
+   * Event listener untuk event 'mousemove'. Memperbarui garis pratinjau untuk mengikuti kursor.
+   * @param event Objek MouseEvent.
+   */
   private onMouseMove = (event: MouseEvent) => {
     if (!this.isDrawing) return;
     
     const point = this.getIntersectionPoint(event);
     if (!point || this.points.length === 0) return;
     
-    // Update the preview line
     if (this.tempLines.length > 0) {
       const previewLine = this.tempLines[0];
       const lastPoint = this.points[this.points.length - 1];
@@ -242,6 +358,9 @@ export class LineTool {
     }
   };
 
+  /**
+   * Menghapus semua garis sementara dari scene dan membuang geometri serta materialnya untuk membebaskan memori.
+   */
   private clearTempLines() {
     this.tempLines.forEach(line => {
       this.scene.remove(line);
@@ -257,6 +376,9 @@ export class LineTool {
     this.tempLines = [];
   }
 
+  /**
+   * Mengatur ulang status menggambar ke nilai awalnya, bersiap untuk operasi menggambar baru.
+   */
   private resetDrawing() {
     this.isDrawing = false;
     this.points = [];
@@ -264,14 +386,21 @@ export class LineTool {
     this.clearTempLines();
   }
 
+  /**
+   * Mengaktifkan LineTool dengan menambahkan semua event listener yang diperlukan.
+   * Fungsi ini memanggil disable() terlebih dahulu untuk memastikan tidak ada listener duplikat.
+   */
   public enable() {
-    this.disable(); // Clean up any existing listeners
+    this.disable();
     window.addEventListener('keydown', this.handleKeyDown);
     this.renderer.domElement.addEventListener('mousedown', this.onMouseDown);
     this.renderer.domElement.addEventListener('mousemove', this.onMouseMove);
     this.renderer.domElement.addEventListener('dblclick', this.handleDoubleClick);
   }
 
+  /**
+   * Menonaktifkan LineTool dengan menghapus semua event listener dan mereset status.
+   */
   public disable() {
     window.removeEventListener('keydown', this.handleKeyDown);
     this.renderer.domElement.removeEventListener('mousedown', this.onMouseDown);
@@ -286,22 +415,29 @@ export class LineTool {
     this.resetDrawing();
   }
 
-
+  /**
+   * Membatalkan aksi menggambar terakhir dengan menghapus mesh terakhir yang dibuat dari scene.
+   * @returns True jika sebuah aksi dibatalkan, false jika tidak.
+   */
   public undo() {
     if (this.historyIndex >= 0) {
-      const line = this.history[this.historyIndex];
-      this.scene.remove(line);
+      const objectToUndo = this.history[this.historyIndex];
+      this.scene.remove(objectToUndo);
       this.historyIndex--;
       return true;
     }
     return false;
   }
 
+  /**
+   * Mengulangi aksi terakhir yang dibatalkan dengan menambahkan kembali mesh ke scene.
+   * @returns True jika sebuah aksi diulangi, false jika tidak.
+   */
   public redo() {
     if (this.historyIndex < this.history.length - 1) {
       this.historyIndex++;
-      const line = this.history[this.historyIndex];
-      this.scene.add(line);
+      const objectToRedo = this.history[this.historyIndex];
+      this.scene.add(objectToRedo);
       return true;
     }
     return false;

@@ -9,10 +9,13 @@ interface ToolbarProps {
   scene: THREE.Scene | null;
   camera: THREE.Camera | null;
   renderer: THREE.WebGLRenderer | null;
+  controls?: {
+    enabled: boolean;
+  };
   onToolChange?: (tool: Tool) => void;
 }
 
-export function Toolbar({ scene, camera, renderer, onToolChange }: ToolbarProps) {
+export function Toolbar({ scene, camera, renderer, controls, onToolChange }: ToolbarProps) {
   const lineTool = useRef<LineTool | null>(null);
   const rectangleTool = useRef<RectangleTool | null>(null);
   const [currentTool, setCurrentTool] = useState<Tool>('select');
@@ -27,9 +30,9 @@ export function Toolbar({ scene, camera, renderer, onToolChange }: ToolbarProps)
   useEffect(() => {
     if (!scene || !camera || !renderer) return;
 
-    // Initialize tools with cancel callback
-    lineTool.current = new LineTool(scene, camera, renderer, handleCancelDrawing);
-    rectangleTool.current = new RectangleTool(scene, camera, renderer, handleCancelDrawing);
+    // Initialize tools with cancel callback and controls
+    lineTool.current = new LineTool(scene, camera, renderer, handleCancelDrawing, controls);
+    rectangleTool.current = new RectangleTool(scene, camera, renderer, handleCancelDrawing, controls);
 
     // Set up keyboard shortcuts for undo/redo
     const handleKeyDown = (event: KeyboardEvent) => {

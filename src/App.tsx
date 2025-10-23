@@ -1,22 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/Addons.js";
-import { components } from "./components/ComponentsManager";
-import { HelloWorldComponents } from "./components/HelloWorldComponent";
-import { SettingsButton } from "./components/SettingsButton";
-import { LineTool } from "./components/LineTool";
-import { RectangleTool } from "./components/RectangleTool";
 import { Toolbar } from "./components/Toolbar";
 import { LayerManager } from "./components/LayerManager";
+import { SettingsButton } from "./components/SettingsButton";
+import { RectangleTool } from "./components/RectangleTool";
 
 import "./App.css";
 
 export default function App() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [scene, setScene] = useState<THREE.Scene | null>(null);
-  const [camera, setCamera] = useState<THREE.Camera | null>(null);
+  const [camera, setCamera] = useState<THREE.PerspectiveCamera | null>(null);
   const [renderer, setRenderer] = useState<THREE.WebGLRenderer | null>(null);
+  const controlsRef = useRef<any>(null);
   const [activeTool, setActiveTool] = useState<string>('select');
   const [rectangleTool, setRectangleTool] = useState<RectangleTool | null>(null);
   const [layers, setLayers] = useState<any[]>([]);
@@ -114,44 +111,36 @@ export default function App() {
     scene.add(gridHelper);
 
     // === Controls ===
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+    controlsRef.current = new OrbitControls(camera, renderer.domElement);
+    controlsRef.current.enableDamping = true;
 
-    // === OBC Component ===
-    let hello = components.get(HelloWorldComponents);
-    if (!hello) {
-      hello = new HelloWorldComponents(components);
-    }
-    hello.greet("Zani");
+    // Initialize settings button
+    SettingsButton({ panelSelector: "#options-panel" });
 
     // === Render loop ===
     const animate = (time: number) => {
       requestAnimationFrame(animate);
-      const delta = time * 0.001;
-      if (hello.enabled) {
-        hello.update(delta);
+      if (controlsRef.current) {
+        controlsRef.current.update();
       }
-      controls.update();
       renderer.render(scene, camera);
     };
     animate(0);
 
-    const button = SettingsButton({ panelSelector: "#options-panel" });
-
-
     // Initialize tools
-    const newRectangleTool = new RectangleTool(scene, camera, renderer, () => {
-      setActiveTool('select');
-    });
+    const newRectangleTool = new RectangleTool(
+      scene, 
+      camera, 
+      renderer, 
+      () => setActiveTool('select'),
+      controlsRef.current
+    );
     setRectangleTool(newRectangleTool);
 
     // === Cleanup ===
     return () => {
       if (newRectangleTool) {
         newRectangleTool.disable();
-      }
-      if (hello) {
-        hello.dispose();
       }
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
@@ -304,11 +293,12 @@ export default function App() {
             display: 'block'
           }}
         />
-        {scene && camera && renderer && (
+        {scene && camera && renderer && controlsRef.current && (
           <Toolbar 
             scene={scene} 
             camera={camera} 
             renderer={renderer}
+            controls={controlsRef.current}
             onToolChange={(tool) => setActiveTool(tool)}
           />
         )}
