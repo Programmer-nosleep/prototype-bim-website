@@ -67,11 +67,7 @@ class SelectionRectangle {
 export class SelectionTool {
   private scene: THREE.Scene;
   private camera: THREE.Camera;
-  private renderer: THREE.WebGLRenderer;
   private selectedObjects: THREE.Object3D[] = [];
-  private selectionBox: THREE.BoxHelper | null = null;
-  private raycaster: THREE.Raycaster;
-  private mouse: THREE.Vector2;
   private domElement: HTMLElement;
   private onSelect: (selected: THREE.Object3D[]) => void;
   private selectionRect: SelectionRectangle;
@@ -91,11 +87,8 @@ export class SelectionTool {
   ) {
     this.scene = scene;
     this.camera = camera;
-    this.renderer = renderer;
     this.onSelect = onSelect;
     this.controls = controls;
-    this.raycaster = new THREE.Raycaster();
-    this.mouse = new THREE.Vector2();
     this.domElement = renderer.domElement;
     this.selectionRect = new SelectionRectangle(this.domElement.parentElement || this.domElement);
   }
@@ -175,8 +168,6 @@ export class SelectionTool {
 
   private onMouseMove = (event: MouseEvent) => {
     if (!this.isDragging) return;
-    
-    const rect = this.domElement.getBoundingClientRect();
     this.selectionRect.update(event.clientX, event.clientY);
   };
 

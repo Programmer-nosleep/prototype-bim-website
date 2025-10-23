@@ -40,13 +40,11 @@ export class LineTool {
   /** Sebuah array untuk menampung garis sementara, seperti garis pratinjau yang mengikuti kursor mouse. */
   private tempLines: THREE.Line[] = [];
   
-  /** Kontrol kamera untuk menonaktifkan/mengaktifkan saat menggambar */
+  // This variable is not used in the current implementation
+  // Keeping it for potential future use
   private controls?: {
     enabled: boolean;
   };
-  
-  /** Menyimpan status awal kontrol kamera */
-  private originalControlsEnabled: boolean = true;
   /** Sebuah timer untuk membantu membedakan antara klik tunggal dan klik ganda. */
   private doubleClickTimer: number | null = null;
   /** Sebuah penghitung untuk klik mouse guna mendeteksi klik ganda. */
@@ -110,51 +108,87 @@ export class LineTool {
    * @param event Objek MouseEvent yang berisi koordinat clientX dan clientY.
    * @returns Sebuah THREE.Vector3 yang merepresentasikan titik potong, atau null jika tidak ditemukan.
    */
-  private getIntersectionPoint(event: MouseEvent): THREE.Vector3 | null {
+  private getIntersectionPoint(event: MouseEvent, useFixedDistance: boolean = false): THREE.Vector3 | null {
+    // Convert mouse position to normalized device coordinates (-1 to +1)
     const mouse = new THREE.Vector2();
     const rect = this.renderer.domElement.getBoundingClientRect();
     
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
+    // Create raycaster
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, this.camera);
-
-    // Create a plane that faces the camera for more natural 3D drawing
+    
+    // Get camera position and direction
+    const cameraPosition = new THREE.Vector3();
+    this.camera.getWorldPosition(cameraPosition);
+    
+    // If we have existing points, create a plane for free-form drawing
+    if (this.points.length > 0 && !useFixedDistance) {
+      const lastPoint = this.points[this.points.length - 1];
+      
+      // Create a plane that's perpendicular to the view direction but aligned with the last point
+      const cameraToPoint = new THREE.Vector3().subVectors(cameraPosition, lastPoint).normalize();
+      const planeNormal = cameraToPoint.clone().normalize();
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, lastPoint);
+      
+      // Find intersection with this plane
+      const intersection = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(plane, intersection)) {
+        // Limit the distance from the last point to prevent lines from being too long
+        const maxDistance = 5; // Maximum distance in world units
+        const distance = lastPoint.distanceTo(intersection);
+        if (distance > maxDistance) {
+          const direction = new THREE.Vector3().subVectors(intersection, lastPoint).normalize();
+          return lastPoint.clone().add(direction.multiplyScalar(maxDistance));
+        }
+        return intersection;
+      }
+    }
+    
+    // If no existing points or plane intersection failed, try intersecting with scene objects
+    const drawableObjects: THREE.Object3D[] = [];
+    
+    // Add all meshes in the scene that we can draw on
+    this.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        // Skip if this is one of our temporary drawing objects
+        const isTempLine = this.tempLines.some(line => line.uuid === object.uuid);
+        const isCurrentLine = this.currentLine && this.currentLine.uuid === object.uuid;
+        if (!isTempLine && !isCurrentLine) {
+          drawableObjects.push(object);
+        }
+      }
+    });
+    
+    // Find intersections with all objects in the scene
+    const intersects = raycaster.intersectObjects(drawableObjects, true);
+    
+    if (intersects.length > 0) {
+      // For the first point, use the exact intersection
+      if (this.points.length === 0 || useFixedDistance) {
+        return intersects[0].point;
+      }
+      
+      // For subsequent points, limit the distance from the last point
+      const lastPoint = this.points[this.points.length - 1];
+      const maxDistance = 5; // Maximum distance in world units
+      const direction = new THREE.Vector3().subVectors(intersects[0].point, lastPoint);
+      const distance = direction.length();
+      
+      if (distance > maxDistance) {
+        return lastPoint.clone().add(direction.normalize().multiplyScalar(maxDistance));
+      }
+      return intersects[0].point;
+    }
+    
+    // If no intersection with objects, create a point at a fixed distance from camera
     const cameraDirection = new THREE.Vector3();
     this.camera.getWorldDirection(cameraDirection);
-    const plane = new THREE.Plane();
     
-    // If we're not drawing yet, use a plane at the camera's look-at point
-    if (!this.isDrawing) {
-      const target = new THREE.Vector3(0, 0, 0);
-      this.camera.getWorldPosition(target);
-      plane.setFromNormalAndCoplanarPoint(
-        cameraDirection,
-        target
-      );
-    } else {
-      // If we're already drawing, use a plane perpendicular to the camera's view
-      // and passing through the last point
-      const lastPoint = this.points[this.points.length - 1];
-      plane.setFromNormalAndCoplanarPoint(
-        cameraDirection,
-        lastPoint
-      );
-    }
-    
-    const intersection = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(plane, intersection)) {
-      return intersection;
-    }
-    
-    // Fallback to ground plane if no intersection with view plane
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-      return intersection;
-    }
-    
-    return null;
+    // Calculate a point 3 units in front of the camera (reduced from 10)
+    return cameraPosition.clone().add(cameraDirection.multiplyScalar(3));
   }
 
   /**
@@ -236,6 +270,9 @@ export class LineTool {
         // Set the draw range to include all points
         geometry.setDrawRange(0, this.points.length);
         positions.needsUpdate = true;
+        
+        // Update the bounding sphere for better rendering
+        geometry.computeBoundingSphere();
       }
       
       // Update the preview line for the next segment
@@ -252,22 +289,50 @@ export class LineTool {
    * @returns Sebuah objek THREE.Mesh, atau null jika titik tidak cukup.
    */
   private createMeshFromPoints(points: THREE.Vector3[]): THREE.Mesh | null {
-    if (points.length < 2) return null;
+    if (points.length < 3) return null; // Need at least 3 points to form a face
 
-    // Create a group to hold both the fill and the border
+    // Calculate the normal of the plane formed by the first three points
+    const v1 = new THREE.Vector3().subVectors(points[1], points[0]);
+    const v2 = new THREE.Vector3().subVectors(points[2], points[0]);
+    const normal = new THREE.Vector3().crossVectors(v1, v2).normalize();
+    
+    // Create a group to hold the mesh
     const group = new THREE.Group();
     
-    // Create a 2D shape from the points
+    // Create a 3D shape using the points
     const shape = new THREE.Shape();
-    shape.moveTo(points[0].x, points[0].z);
     
-    for (let i = 1; i < points.length; i++) {
-      shape.lineTo(points[i].x, points[i].z);
+    // Project 3D points onto a 2D plane for the shape
+    // We'll use the first point as the origin
+    const origin = points[0].clone();
+    
+    // Create two basis vectors for the plane
+    const up = new THREE.Vector3(0, 1, 0);
+    let right = new THREE.Vector3().crossVectors(up, normal).normalize();
+    if (right.length() < 0.0001) {
+      // If normal is parallel to up vector, use a different basis
+      right = new THREE.Vector3(1, 0, 0);
+    }
+    const forward = new THREE.Vector3().crossVectors(normal, right).normalize();
+    
+    // Project points onto the plane
+    const projectedPoints = points.map(point => {
+      const v = new THREE.Vector3().subVectors(point, origin);
+      return new THREE.Vector2(
+        v.dot(right),
+        v.dot(forward)
+      );
+    });
+    
+    // Create shape from projected points
+    shape.moveTo(projectedPoints[0].x, projectedPoints[0].y);
+    for (let i = 1; i < projectedPoints.length; i++) {
+      shape.lineTo(projectedPoints[i].x, projectedPoints[i].y);
     }
     
     // Close the shape if not already closed
-    if (!points[0].equals(points[points.length - 1])) {
-      shape.lineTo(points[0].x, points[0].z);
+    if (!projectedPoints[0].equals(projectedPoints[projectedPoints.length - 1])) {
+      shape.closePath();
     }
     
     // Create fill material (semi-transparent white)
@@ -276,23 +341,36 @@ export class LineTool {
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.9,     // 90% opacity
-      depthWrite: false
+      depthWrite: true
     });
     
-    // Create fill mesh (completely flat 2D plane)
+    // Create fill mesh
     const fillGeometry = new THREE.ShapeGeometry(shape);
     const fillMesh = new THREE.Mesh(fillGeometry, fillMaterial);
-    fillMesh.rotation.x = -Math.PI / 2; // Rotate to be flat on XZ plane
-    fillMesh.position.y = 0.001; // Slightly above ground to prevent z-fighting
     
-    // Create border using the actual shape points
+    // Position and orient the mesh in 3D space
+    const center = new THREE.Vector3();
+    points.forEach(point => center.add(point));
+    center.divideScalar(points.length);
+    
+    // Create a matrix to transform from 2D plane to 3D space
+    const matrix = new THREE.Matrix4();
+    matrix.makeBasis(right, forward, normal);
+    matrix.setPosition(center);
+    
+    // Apply the transformation
+    fillMesh.applyMatrix4(matrix);
+    
+    // Create border using the actual 3D points
     const borderGeometry = new THREE.BufferGeometry();
     const borderPoints = [];
     
     // Add all points for the border
     for (let i = 0; i <= points.length; i++) {
       const point = points[i % points.length];
-      borderPoints.push(new THREE.Vector3(point.x, 0.002, point.z));
+      // Offset slightly along the normal to prevent z-fighting
+      const offsetPoint = point.clone().add(normal.clone().multiplyScalar(0.001));
+      borderPoints.push(offsetPoint);
     }
     
     borderGeometry.setFromPoints(borderPoints);
@@ -381,8 +459,10 @@ export class LineTool {
   private onMouseMove = (event: MouseEvent) => {
     if (!this.isDrawing) return;
     
-    const point = this.getIntersectionPoint(event);
-    if (!point || this.points.length === 0) return;
+    // For the first point, use exact cursor position
+    const useFixedDistance = this.points.length === 0;
+    const point = this.getIntersectionPoint(event, useFixedDistance);
+    if (!point) return;
     
     // Update the preview line
     if (this.tempLines.length > 0) {

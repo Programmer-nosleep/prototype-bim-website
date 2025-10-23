@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LineTool } from './LineTool';
 import { RectangleTool } from './RectangleTool';
 import { ExtrudeTool } from './ExtrudeTool';
+import { ExtendTool } from './ExtendTool';
 import { SelectionTool } from './SelectionTool';
 import { HandTool } from './HandTool';
 import ExtrusionControls from './ExtrusionControls';
 import * as THREE from 'three';
 
-type Tool = 'hand' | 'select' | 'line' | 'rectangle' | 'extrude' | 'move' | 'rotate' | 'scale';
+type Tool = 'hand' | 'select' | 'line' | 'rectangle' | 'extrude' | 'extend' | 'move' | 'rotate' | 'scale';
 
 interface ToolbarProps {
   scene: THREE.Scene | null;
@@ -23,17 +24,58 @@ export function Toolbar({ scene, camera, renderer, controls, onToolChange }: Too
   const lineTool = useRef<LineTool | null>(null);
   const rectangleTool = useRef<RectangleTool | null>(null);
   const extrudeTool = useRef<ExtrudeTool | null>(null);
+  const extendTool = useRef<ExtendTool | null>(null);
   const selectionTool = useRef<SelectionTool | null>(null);
   const handTool = useRef<HandTool | null>(null);
   const [extrusionHeight, setExtrusionHeight] = useState(1);
+  const [extendScale, setExtendScale] = useState(new THREE.Vector3(1, 1, 1));
   const [showExtrusionControls, setShowExtrusionControls] = useState(false);
+  const [showExtendControls, setShowExtendControls] = useState(false);
   const [activeTool, setActiveTool] = useState<Tool>('hand');
-  const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
+  // Removed unused state variables
+  // const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
 
   const handleCancelDrawing = () => {
     setActiveTool('select');
     if (onToolChange) {
       onToolChange('select');
+    }
+  };
+
+  const handleToolChange = (tool: Tool) => {
+    // Disable all tools first
+    if (lineTool.current) lineTool.current.disable();
+    if (rectangleTool.current) rectangleTool.current.disable();
+    if (extrudeTool.current) extrudeTool.current.disable();
+    if (extendTool.current) extendTool.current.disable();
+    if (selectionTool.current) selectionTool.current.disable();
+    if (handTool.current) handTool.current.disable();
+    
+    // Enable the selected tool
+    switch (tool) {
+      case 'line':
+        if (lineTool.current) lineTool.current.enable();
+        break;
+      case 'rectangle':
+        if (rectangleTool.current) rectangleTool.current.enable();
+        break;
+      case 'extrude':
+        if (extrudeTool.current) extrudeTool.current.enable();
+        break;
+      case 'extend':
+        if (extendTool.current) extendTool.current.enable();
+        break;
+      case 'select':
+        if (selectionTool.current) selectionTool.current.enable();
+        break;
+      case 'hand':
+        if (handTool.current) handTool.current.enable();
+        break;
+    }
+    
+    setActiveTool(tool);
+    if (onToolChange) {
+      onToolChange(tool);
     }
   };
 
@@ -49,19 +91,47 @@ export function Toolbar({ scene, camera, renderer, controls, onToolChange }: Too
   useEffect(() => {
     if (!scene || !camera || !renderer) return;
 
-    // Initialize tools with cancel callback and controls
+    // Cleanup tools
+    if (lineTool.current) lineTool.current.disable();
+    if (rectangleTool.current) rectangleTool.current.disable();
+    if (extrudeTool.current) extrudeTool.current.disable();
+    if (extendTool.current) extendTool.current.disable();
+    if (selectionTool.current) selectionTool.current.disable();
+    if (handTool.current) handTool.current.disable();
+
+    // Initialize tools
     lineTool.current = new LineTool(scene, camera, renderer, handleCancelDrawing, controls);
     rectangleTool.current = new RectangleTool(scene, camera, renderer, handleCancelDrawing, controls);
     extrudeTool.current = new ExtrudeTool(scene, camera, renderer, handleCancelDrawing, controls);
-    selectionTool.current = new SelectionTool(
-      scene, 
-      camera, 
-      renderer, 
-      (selected: THREE.Object3D[]) => {
-        setSelectedObjects(selected);
-      }
-    );
+    extendTool.current = new ExtendTool(scene, camera, renderer, handleCancelDrawing, controls);
+    // Initialize SelectionTool with proper parameters
+    if (renderer) {
+      selectionTool.current = new SelectionTool(
+        scene, 
+        camera, 
+        renderer,
+        (selected) => {
+          // Handle selection changes if needed
+          console.log('Selected objects:', selected);
+        },
+        controls
+      );
+    }
     handTool.current = new HandTool(camera, renderer, controls);
+
+    // Set up extrude tool callbacks
+    if (extrudeTool.current) {
+      extrudeTool.current.setOnExtrudeUpdate((height) => {
+        setExtrusionHeight(height);
+      });
+    }
+
+    // Set up extend tool callbacks
+    if (extendTool.current) {
+      extendTool.current.setOnExtendUpdate((scale) => {
+        setExtendScale(scale.clone());
+      });
+    }
 
     // Set up keyboard shortcuts for undo/redo
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -87,86 +157,53 @@ export function Toolbar({ scene, camera, renderer, controls, onToolChange }: Too
   }, [scene, camera, renderer]);
 
   const handleToolSelect = (tool: Tool) => {
-    // Clean up previous tool
-    if (activeTool === 'hand' && handTool.current) {
-      handTool.current.disable();
-    } else if (activeTool === 'line' && lineTool.current) {
-      lineTool.current.disable();
-    } else if (activeTool === 'rectangle' && rectangleTool.current) {
-      rectangleTool.current.disable();
-    } else if (activeTool === 'extrude' && extrudeTool.current) {
-      extrudeTool.current.disable();
-      setShowExtrusionControls(false);
-    } else if (activeTool === 'select' && selectionTool.current) {
-      selectionTool.current.disable();
+    // Disable all tools first
+    handTool.current?.disable();
+    selectionTool.current?.disable();
+    lineTool.current?.disable();
+    rectangleTool.current?.disable();
+    extrudeTool.current?.disable();
+    extendTool.current?.disable();
+    setShowExtrusionControls(false);
+    setShowExtendControls(false);
+
+    switch (tool) {
+      case 'hand':
+        handTool.current?.enable();
+        break;
+      case 'select':
+        selectionTool.current?.enable();
+        break;
+      case 'line':
+        lineTool.current?.enable();
+        break;
+      case 'rectangle':
+        rectangleTool.current?.enable();
+        break;
+      case 'extrude':
+        extrudeTool.current?.enable();
+        setShowExtrusionControls(true);
+        break;
+      case 'extend':
+        extendTool.current?.enable();
+        setShowExtendControls(true);
+        break;
+      case 'move':
+      case 'rotate':
+      case 'scale':
+        // Implement these tools as needed
+        break;
+      default:
+        break;
     }
-    
     setActiveTool(tool);
     if (onToolChange) onToolChange(tool);
-    
-    // Enable new tool
-    if (tool === 'hand' && handTool.current) {
-      handTool.current.enable();
-      setActiveTool('hand');
-    } else if (tool === 'select' && scene && camera && renderer) {
-      if (!selectionTool.current) {
-        selectionTool.current = new SelectionTool(
-          scene, 
-          camera, 
-          renderer, 
-          (selected: THREE.Object3D[]) => {
-            setSelectedObjects(selected);
-          }
-        );
-      }
-      selectionTool.current.enable();
-      setActiveTool('select');
-    } else if (tool === 'line' && lineTool.current) {
-      lineTool.current.enable();
-      setActiveTool('line');
-    } else if (tool === 'rectangle' && rectangleTool.current) {
-      rectangleTool.current.enable();
-      setActiveTool('rectangle');
-    } else if (tool === 'extrude' && extrudeTool.current) {
-      extrudeTool.current.enable();
-      setActiveTool('extrude');
-      setShowExtrusionControls(true);
-    } else if (tool === 'rectangle' && scene && camera && renderer) {
-      if (!rectangleTool.current) {
-        rectangleTool.current = new RectangleTool(scene, camera, renderer, () => {
-          setActiveTool('select');
-          if (onToolChange) onToolChange('select');
-        }, controls);
-      }
-      rectangleTool.current.enable();
-    } else if (tool === 'extrude' && scene && camera && renderer) {
-      if (!extrudeTool.current) {
-        extrudeTool.current = new ExtrudeTool(scene, camera, renderer, () => {
-          setActiveTool('select');
-          setShowExtrusionControls(false);
-          if (onToolChange) onToolChange('select');
-        }, controls);
-        
-        extrudeTool.current.setOnExtrudeUpdate((height: number) => {
-          setExtrusionHeight(height);
-        });
-      }
-      extrudeTool.current.enable();
-      setShowExtrusionControls(true);
-    } else {
-      if (lineTool.current) lineTool.current.disable();
-      if (rectangleTool.current) rectangleTool.current.disable();
-      if (extrudeTool.current) extrudeTool.current.disable();
-      if (selectionTool.current) selectionTool.current.disable();
-    }
   };
 
-  const handleHeightChange = (height: number) => {
+  const handleHeightChange = useCallback((height: number) => {
     setExtrusionHeight(height);
-    if (extrudeTool.current) {
-      extrudeTool.current.setHeight(height);
-    }
-  };
+    extrudeTool.current?.setHeight(height);
+  }, []);
 
   const toolbarStyle: React.CSSProperties = {
     position: 'absolute',
@@ -253,6 +290,13 @@ export function Toolbar({ scene, camera, renderer, controls, onToolChange }: Too
         >
           <span>🡹</span>
         </button>
+        <button
+          style={getButtonStyle('extend')}
+          onClick={() => handleToolSelect('extend')}
+          title="Extend Tool (X)"
+        >
+          <span>🡸</span>
+        </button>
         <div style={dividerStyle}></div>
         <button
           style={getButtonStyle('move')}
@@ -283,8 +327,50 @@ export function Toolbar({ scene, camera, renderer, controls, onToolChange }: Too
         <ExtrusionControls 
           height={extrusionHeight}
           onHeightChange={handleHeightChange}
-          visible={activeTool === 'extrude'}
+          visible={true}
         />
+      )}
+      
+      {showExtendControls && (
+        <div className="absolute top-16 right-4 bg-gray-800 p-4 rounded-lg shadow-lg">
+          <h3 className="text-white mb-2">Extend Tool</h3>
+          <div className="space-y-2">
+            <div>
+              <label className="text-white text-sm block mb-1">Width (X)</label>
+              <input
+                type="number"
+                step="0.1"
+                value={extendScale.x}
+                onChange={(e) => {
+                  const newScale = extendScale.clone();
+                  newScale.x = parseFloat(e.target.value) || 1;
+                  setExtendScale(newScale);
+                  if (extendTool.current) {
+                    extendTool.current.setScale(newScale);
+                  }
+                }}
+                className="w-full p-1 rounded bg-gray-700 text-white"
+              />
+            </div>
+            <div>
+              <label className="text-white text-sm block mb-1">Depth (Z)</label>
+              <input
+                type="number"
+                step="0.1"
+                value={extendScale.z}
+                onChange={(e) => {
+                  const newScale = extendScale.clone();
+                  newScale.z = parseFloat(e.target.value) || 1;
+                  setExtendScale(newScale);
+                  if (extendTool.current) {
+                    extendTool.current.setScale(newScale);
+                  }
+                }}
+                className="w-full p-1 rounded bg-gray-700 text-white"
+              />
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

@@ -8,8 +8,6 @@ import SettingsButton from "./components/SettingsButton";
 import ProfileAccount from "./components/ProfileAccount";
 import { Terminal } from 'lucide-react';
 import CommandLine from './components/CommandLine.tsx';
-
-// Import CSS
 import "./App.css";
 
 export default function App() {
@@ -106,8 +104,9 @@ export default function App() {
     scene.background = new THREE.Color(0x202025);
     setScene(scene);
 
-    const near = 5;
-    const far = 15;
+    // Adjust fog to be less dense and extend further
+    const near = 20;  // Increased from 5
+    const far = 55;  // Increased from 15
     scene.fog = new THREE.Fog(0x0202025, near, far);
     scene.background = new THREE.Color(scene.fog.color);
 
@@ -389,9 +388,6 @@ export default function App() {
           Status: Connected
         </div>
       </div>
-
-      {/* Left Sidebar - Navigation */}
-      
 
       {/* Main Content - 3D View */}
       <div style={{
