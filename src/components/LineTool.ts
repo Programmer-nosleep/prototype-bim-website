@@ -120,13 +120,37 @@ export class LineTool {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, this.camera);
 
-    // Always use a fixed ground plane at y=0 for rectangle drawing
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const intersection = new THREE.Vector3();
+    // Create a plane that faces the camera for more natural 3D drawing
+    const cameraDirection = new THREE.Vector3();
+    this.camera.getWorldDirection(cameraDirection);
+    const plane = new THREE.Plane();
     
+    // If we're not drawing yet, use a plane at the camera's look-at point
+    if (!this.isDrawing) {
+      const target = new THREE.Vector3(0, 0, 0);
+      this.camera.getWorldPosition(target);
+      plane.setFromNormalAndCoplanarPoint(
+        cameraDirection,
+        target
+      );
+    } else {
+      // If we're already drawing, use a plane perpendicular to the camera's view
+      // and passing through the last point
+      const lastPoint = this.points[this.points.length - 1];
+      plane.setFromNormalAndCoplanarPoint(
+        cameraDirection,
+        lastPoint
+      );
+    }
+    
+    const intersection = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(plane, intersection)) {
+      return intersection;
+    }
+    
+    // Fallback to ground plane if no intersection with view plane
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
-      // Snap to ground plane at y=0
-      intersection.y = 0;
       return intersection;
     }
     
@@ -141,13 +165,21 @@ export class LineTool {
   private createLine(points: THREE.Vector3[]): THREE.Line {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const material = new THREE.LineBasicMaterial({ 
-      color: 0xffffff,  // White color for all lines
-      linewidth: 1.5,
+      color: 0x00ff00,  // Green color for better visibility
+      linewidth: 2,
+      linecap: 'round',
+      linejoin: 'round',
       transparent: true,
       opacity: 0.9
     });
+    
     const line = new THREE.Line(geometry, material);
     line.renderOrder = 1; // Ensure lines are rendered on top
+    
+    // Enable line to be selectable and cast/receive shadows
+    line.castShadow = true;
+    line.receiveShadow = true;
+    
     return line;
   }
 
@@ -157,50 +189,56 @@ export class LineTool {
    */
   private handleSingleClick = (point: THREE.Vector3) => {
     if (!this.isDrawing) {
-      // Klik pertama: Mulai gambar baru.
+      // First click: Start a new drawing.
       this.isDrawing = true;
       this.points = [point.clone()];
 
-      // Siapkan objek garis baru dengan buffer yang sudah dialokasikan
+      // Create a new line with dynamic buffer
       const geometry = new THREE.BufferGeometry();
-      const positions = new Float32Array(this.MAX_POINTS * 3); // 3 koordinat (x, y, z) per titik
+      const positions = new Float32Array(this.MAX_POINTS * 3);
       geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff00, linewidth: 2 });
+      // Create a more visible line material
+      const material = new THREE.LineBasicMaterial({ 
+        color: 0x00ff00, 
+        linewidth: 2,
+        linecap: 'round',
+        linejoin: 'round'
+      });
+      
       this.currentLine = new THREE.Line(geometry, material);
-      this.currentLine.frustumCulled = false; // Mencegah garis menghilang jika di luar pandangan kamera
+      this.currentLine.frustumCulled = false;
       this.scene.add(this.currentLine);
 
-      // Tambahkan titik pertama ke geometri
+      // Store the initial point
       const positionsAttribute = this.currentLine.geometry.attributes.position as THREE.BufferAttribute;
       positionsAttribute.setXYZ(0, point.x, point.y, point.z);
       
-      // Atur draw range untuk menggambar segmen garis pertama (membutuhkan 2 titik)
-      this.currentLine.geometry.setDrawRange(0, 1);
-
-      // Buat garis "pratinjau" yang akan membentang dari titik ini ke kursor mouse.
+      // Create a preview line for the next segment
       const previewLine = this.createLine([point.clone(), point.clone()]);
       this.tempLines.push(previewLine);
       this.scene.add(previewLine);
 
     } else {
-      // Klik berikutnya: Tambahkan titik baru ke polyline saat ini.
+      // Add a new point to the current line
       this.points.push(point.clone());
       
       if (this.currentLine) {
         const geometry = this.currentLine.geometry as THREE.BufferGeometry;
         const positions = geometry.attributes.position as THREE.BufferAttribute;
-        const index = this.points.length - 1;
-
-        // Perbarui posisi di dalam buffer
-        positions.setXYZ(index, point.x, point.y, point.z);
-        positions.needsUpdate = true; // Penting! Memberi tahu Three.js bahwa data telah berubah.
-
-        // Perbarui draw range untuk menyertakan titik baru.
+        
+        // Update all points including the new one
+        for (let i = 0; i < this.points.length; i++) {
+          const p = this.points[i];
+          positions.setXYZ(i, p.x, p.y, p.z);
+        }
+        
+        // Set the draw range to include all points
         geometry.setDrawRange(0, this.points.length);
+        positions.needsUpdate = true;
       }
       
-      // Perbarui garis pratinjau agar dimulai dari titik baru.
+      // Update the preview line for the next segment
       this.clearTempLines();
       const previewLine = this.createLine([point.clone(), point.clone()]);
       this.tempLines.push(previewLine);
@@ -346,15 +384,36 @@ export class LineTool {
     const point = this.getIntersectionPoint(event);
     if (!point || this.points.length === 0) return;
     
+    // Update the preview line
     if (this.tempLines.length > 0) {
       const previewLine = this.tempLines[0];
       const lastPoint = this.points[this.points.length - 1];
       const geometry = previewLine.geometry as THREE.BufferGeometry;
       const positions = geometry.attributes.position as THREE.BufferAttribute;
       
+      // Update the preview line to show from last point to current mouse position
       positions.setXYZ(0, lastPoint.x, lastPoint.y, lastPoint.z);
       positions.setXYZ(1, point.x, point.y, point.z);
       positions.needsUpdate = true;
+      
+      // Update the main line geometry if we have more than one point
+      if (this.currentLine && this.points.length > 1) {
+        const mainGeometry = this.currentLine.geometry as THREE.BufferGeometry;
+        const mainPositions = mainGeometry.attributes.position as THREE.BufferAttribute;
+        
+        // Update all points in the main line
+        for (let i = 0; i < this.points.length; i++) {
+          const p = this.points[i];
+          mainPositions.setXYZ(i, p.x, p.y, p.z);
+        }
+        
+        // Add the current mouse position as the last point
+        mainPositions.setXYZ(this.points.length, point.x, point.y, point.z);
+        mainPositions.needsUpdate = true;
+        
+        // Update the draw range to include the new point
+        mainGeometry.setDrawRange(0, this.points.length + 1);
+      }
     }
   };
 

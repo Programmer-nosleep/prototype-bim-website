@@ -3,9 +3,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/Addons.js";
 import { Toolbar } from "./components/Toolbar";
 import { LayerManager } from "./components/LayerManager";
-import { SettingsButton } from "./components/SettingsButton";
 import { RectangleTool } from "./components/RectangleTool";
+import SettingsButton from "./components/SettingsButton";
+import ProfileAccount from "./components/ProfileAccount";
+import { Terminal } from 'lucide-react';
+import CommandLine from './components/CommandLine.tsx';
 
+// Import CSS
 import "./App.css";
 
 export default function App() {
@@ -13,11 +17,73 @@ export default function App() {
   const [scene, setScene] = useState<THREE.Scene | null>(null);
   const [camera, setCamera] = useState<THREE.PerspectiveCamera | null>(null);
   const [renderer, setRenderer] = useState<THREE.WebGLRenderer | null>(null);
-  const controlsRef = useRef<any>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
   const [activeTool, setActiveTool] = useState<string>('select');
   const [rectangleTool, setRectangleTool] = useState<RectangleTool | null>(null);
-  const [layers, setLayers] = useState<any[]>([]);
+  const [layers, setLayers] = useState<Array<{id: string, name: string, visible: boolean}>>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
+  const [showCommandLine, setShowCommandLine] = useState(false);
+
+  // Handle command execution
+  const handleCommand = (command: string, args: string[]) => {
+    console.log(`Executing command: ${command}`, args);
+    
+    switch (command) {
+      case 'line':
+      case 'rectangle':
+      case 'extrude':
+      case 'select':
+      case 'move':
+      case 'rotate':
+      case 'scale':
+        setActiveTool(command);
+        break;
+        
+      case 'hide':
+        if (args[0] === 'command') {
+          setShowCommandLine(false);
+        } else if (args[0] === 'toolbar') {
+          // Handle toolbar visibility if needed
+        }
+        break;
+        
+      case 'show':
+        if (args[0] === 'command') {
+          setShowCommandLine(true);
+        }
+        break;
+        
+      case 'help':
+        console.log('Available commands:');
+        console.log('- line: Activate line tool');
+        console.log('- rectangle: Activate rectangle tool');
+        console.log('- extrude: Activate extrude tool');
+        console.log('- select: Activate selection tool');
+        console.log('- move: Activate move tool');
+        console.log('- rotate: Activate rotate tool');
+        console.log('- scale: Activate scale tool');
+        console.log('- show command: Show command line');
+        console.log('- hide command: Hide command line');
+        console.log('- help: Show this help message');
+        break;
+        
+      default:
+        console.log(`Unknown command: ${command}. Type 'help' for a list of commands.`);
+    }
+  };
+
+  // Toggle command line visibility with Ctrl+Space
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.code === 'Space') {
+        setShowCommandLine(prev => !prev);
+        e.preventDefault();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Reusable style for property items
   const propertyItemStyle = {
@@ -112,20 +178,22 @@ export default function App() {
 
     // === Controls ===
     controlsRef.current = new OrbitControls(camera, renderer.domElement);
-    controlsRef.current.enableDamping = true;
+    controlsRef.current.enableDamping = false; // Disable damping for less smooth movement
+    controlsRef.current.rotateSpeed = 0.8; // Reduce rotation speed
+    controlsRef.current.zoomSpeed = 0.8;   // Reduce zoom speed
+    controlsRef.current.panSpeed = 0.8;    // Reduce pan speed
 
-    // Initialize settings button
-    SettingsButton({ panelSelector: "#options-panel" });
+    // Settings button is now used as a component in the JSX
 
     // === Render loop ===
-    const animate = (time: number) => {
+    const animate = () => {
       requestAnimationFrame(animate);
       if (controlsRef.current) {
         controlsRef.current.update();
       }
       renderer.render(scene, camera);
     };
-    animate(0);
+    animate();
 
     // Initialize tools
     const newRectangleTool = new RectangleTool(
@@ -199,26 +267,108 @@ export default function App() {
       display: 'grid',
       gridTemplateAreas: `
         "header header header"
-        "left main right"
+        "main main right"
         "footer footer footer"
       `,
-      gridTemplateColumns: '300px 1fr 300px',
-      gridTemplateRows: 'auto 1fr auto',
+      gridTemplateColumns: '0 1fr 300px',
+      gridTemplateRows: '48px 1fr 24px',
       height: '100vh',
       width: '100vw',
       overflow: 'hidden',
-      backgroundColor: '#1e1e1e'
+      backgroundColor: '#1e1e1e',
+      position: 'relative',
+      color: '#e0e0e0',
+      fontFamily: 'Inter, system-ui, -apple-system, sans-serif'
     }}>
+      {/* Left Sidebar - Removed */}
+
+      {/* Main Content - 3D View */}
+      <div style={{
+        gridArea: 'main',
+        position: 'relative',
+        backgroundColor: '#1e1e1e',
+        overflow: 'hidden'
+      }}>
+        <canvas 
+          ref={canvasRef} 
+          style={{
+            width: '100%',
+            height: '100%',
+            display: 'block',
+            outline: 'none'
+          }}
+          tabIndex={0}
+        />
+      </div>
+
+      {/* Right Sidebar - Layers & Properties */}
+      <div style={{
+        gridArea: 'right',
+        backgroundColor: '#252526',
+        borderLeft: '1px solid #3c3c3c',
+        display: 'flex',
+        flexDirection: 'column'
+      }}>
+        {/* Profile & Settings */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '12px 16px',
+          borderBottom: '1px solid #3c3c3c'
+        }}>
+          <ProfileAccount />
+          <SettingsButton onClick={() => {
+            const panel = document.querySelector('.options-panel');
+            if (panel) {
+              panel.classList.toggle('visible');
+            }
+          }} />
+        </div>
+
+        {/* Layers */}
+        <div style={{
+          flex: 1,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          <div style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid #3c3c3c',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <h3 style={{ margin: 0, fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Layers</h3>
+          </div>
+          <div style={{ flex: 1, overflow: 'auto' }}>
+            {scene && (
+              <LayerManager 
+                scene={scene}
+                onLayerChange={(layers) => {
+                  console.log('Layers updated:', layers);
+                }}
+                onObjectLayerChange={(object, newLayerId) => {
+                  console.log('Object moved to layer:', object, newLayerId);
+                }}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Header */}
       <div style={{
         gridArea: 'header',
-        backgroundColor: '#252526',
-        padding: '10px 20px',
+        backgroundColor: '#2d2d2d',
         borderBottom: '1px solid #3c3c3c',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        color: 'white'
+        padding: '0 16px',
+        color: '#e0e0e0',
+        fontSize: '14px'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <div style={{
@@ -241,42 +391,7 @@ export default function App() {
       </div>
 
       {/* Left Sidebar - Navigation */}
-      <div style={{
-        gridArea: 'left',
-        backgroundColor: '#252526',
-        borderRight: '1px solid #3c3c3c',
-        padding: '15px',
-        overflowY: 'auto'
-      }}>
-        <h3 style={{ margin: '0 0 15px 0', color: '#9e9e9e' }}>Navigation</h3>
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px'
-        }}>
-          {['Home', 'Models', 'Materials', 'Lights', 'Views'].map((item) => (
-            <div 
-              key={item} 
-              className={`nav-item ${item === 'Models' ? 'active' : ''}`}
-              style={{
-                padding: '8px 12px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                backgroundColor: item === 'Models' ? '#2a2d2e' : 'transparent',
-                color: 'white',
-                transition: 'background-color 0.2s',
-                ...(item !== 'Models' && {
-                  ':hover': {
-                    backgroundColor: '#2a2d2e'
-                  }
-                })
-              }}
-            >
-              {item}
-            </div>
-          ))}
-        </div>
-      </div>
+      
 
       {/* Main Content - 3D View */}
       <div style={{
@@ -511,6 +626,40 @@ export default function App() {
         <div>Ready</div>
         <div>FPS: 60</div>
       </div>
+      
+      {/* Command Line */}
+      <CommandLine 
+        onCommand={handleCommand} 
+        visible={showCommandLine}
+        onToggleVisibility={() => setShowCommandLine(!showCommandLine)}
+      />
+      
+      {/* Command Line Toggle Button */}
+      <button 
+        onClick={() => setShowCommandLine(!showCommandLine)}
+        style={{
+          position: 'fixed',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          backgroundColor: showCommandLine ? '#4CAF50' : '#2c2c2c',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          padding: '8px 16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          zIndex: 999,
+          boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
+          transition: 'all 0.2s ease',
+        }}
+        title="Toggle Command Line (Ctrl+Space)"
+      >
+        <Terminal size={16} />
+        {showCommandLine ? 'Hide Command' : 'Show Command'}
+      </button>
     </div>
   );
 }

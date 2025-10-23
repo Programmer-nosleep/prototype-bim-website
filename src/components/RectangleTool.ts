@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ExtrudeTool } from './ExtrudeTool';
 
 type DrawableObject = THREE.Mesh;
 
@@ -144,12 +145,32 @@ export class RectangleTool {
   };
 
   private onMouseUp = () => {
-    if (!this.isDrawing || !this.currentMesh) return;
+    if (!this.isDrawing || !this.currentMesh || !this.startPoint) return;
     
-    // Add to history
-    this.history = this.history.slice(0, this.historyIndex + 1);
-    this.history.push(this.currentMesh);
-    this.historyIndex++;
+    // Get the rectangle dimensions
+    const endPoint = this.getRectangleEndPoint(this.currentMesh);
+    if (!endPoint) {
+      this.resetDrawing();
+      return;
+    }
+    
+    // Create a shape from the rectangle
+    const shape = this.createRectangleShape(this.startPoint, endPoint);
+    
+    // Create an extruded mesh
+    const extrudeTool = new ExtrudeTool(
+      this.scene,
+      this.camera,
+      this.renderer,
+      () => {},
+      this.controls
+    );
+    
+    // Add the extruded mesh to the scene
+    extrudeTool.createExtrusion(shape, 1, this.getRectangleCenter(this.startPoint, endPoint));
+    
+    // Remove the temporary rectangle
+    this.scene.remove(this.currentMesh);
     
     // Re-enable camera controls if they were enabled before
     if (this.controls) {
@@ -158,6 +179,48 @@ export class RectangleTool {
     
     this.resetDrawing();
   };
+  
+  private getRectangleEndPoint(mesh: THREE.Mesh): THREE.Vector3 | null {
+    if (!mesh.geometry) return null;
+    
+    const box = new THREE.Box3().setFromObject(mesh);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    
+    return new THREE.Vector3(
+      mesh.position.x + size.x / 2,
+      0,
+      mesh.position.z + size.z / 2
+    );
+  }
+  
+  private getRectangleCenter(startPoint: THREE.Vector3, endPoint: THREE.Vector3): THREE.Vector3 {
+    return new THREE.Vector3(
+      (startPoint.x + endPoint.x) / 2,
+      0,
+      (startPoint.z + endPoint.z) / 2
+    );
+  }
+  
+  private createRectangleShape(startPoint: THREE.Vector3, endPoint: THREE.Vector3): THREE.Shape {
+    const width = Math.abs(endPoint.x - startPoint.x);
+    const depth = Math.abs(endPoint.z - startPoint.z);
+    const minSize = 0.1;
+    const actualWidth = Math.max(width, minSize);
+    const actualDepth = Math.max(depth, minSize);
+    
+    const shape = new THREE.Shape();
+    const halfW = actualWidth / 2;
+    const halfD = actualDepth / 2;
+    
+    shape.moveTo(-halfW, -halfD);
+    shape.lineTo(halfW, -halfD);
+    shape.lineTo(halfW, halfD);
+    shape.lineTo(-halfW, halfD);
+    shape.lineTo(-halfW, -halfD);
+    
+    return shape;
+  }
 
   private resetDrawing() {
     this.isDrawing = false;
