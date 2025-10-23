@@ -4,6 +4,8 @@ import { OrbitControls } from "three/examples/jsm/Addons.js";
 import { components } from "./components/ComponentsManager";
 import { HelloWorldComponents } from "./components/HelloWorldComponent";
 import { SettingsButton } from "./components/SettingsButton";
+import { LineTool } from "./components/LineTool";
+import { RectangleTool } from "./components/RectangleTool";
 import { Toolbar } from "./components/Toolbar";
 import { LayerManager } from "./components/LayerManager";
 
@@ -16,6 +18,7 @@ export default function App() {
   const [camera, setCamera] = useState<THREE.Camera | null>(null);
   const [renderer, setRenderer] = useState<THREE.WebGLRenderer | null>(null);
   const [activeTool, setActiveTool] = useState<string>('select');
+  const [rectangleTool, setRectangleTool] = useState<RectangleTool | null>(null);
   const [layers, setLayers] = useState<any[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
 
@@ -136,8 +139,17 @@ export default function App() {
     const button = SettingsButton({ panelSelector: "#options-panel" });
 
 
+    // Initialize tools
+    const newRectangleTool = new RectangleTool(scene, camera, renderer, () => {
+      setActiveTool('select');
+    });
+    setRectangleTool(newRectangleTool);
+
     // === Cleanup ===
     return () => {
+      if (newRectangleTool) {
+        newRectangleTool.disable();
+      }
       if (hello) {
         hello.dispose();
       }
@@ -153,6 +165,46 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!scene || !camera || !renderer) return;
+
+    // Disable all tools first
+    if (rectangleTool) {
+      rectangleTool.disable();
+    }
+
+    // Enable the selected tool
+    if (activeTool === 'rectangle') {
+      rectangleTool?.enable();
+    }
+
+    return () => {
+      // Cleanup when component unmounts or tool changes
+      rectangleTool?.disable();
+    };
+  }, [activeTool, scene, camera, renderer]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveTool('select');
+      }
+      
+      // Forward key events to the active tool
+      if (activeTool === 'rectangle' && rectangleTool) {
+        if (rectangleTool.handleKeyDown(event)) {
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activeTool, rectangleTool]);
+
   return (
     <div style={{
       display: 'grid',

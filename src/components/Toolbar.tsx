@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { LineTool } from './LineTool';
+import { RectangleTool } from './RectangleTool';
 import * as THREE from 'three';
 
-type Tool = 'select' | 'line' | 'move' | 'rotate' | 'scale';
+type Tool = 'select' | 'line' | 'rectangle' | 'move' | 'rotate' | 'scale';
 
 interface ToolbarProps {
   scene: THREE.Scene | null;
@@ -13,6 +14,7 @@ interface ToolbarProps {
 
 export function Toolbar({ scene, camera, renderer, onToolChange }: ToolbarProps) {
   const lineTool = useRef<LineTool | null>(null);
+  const rectangleTool = useRef<RectangleTool | null>(null);
   const [currentTool, setCurrentTool] = useState<Tool>('select');
 
   const handleCancelDrawing = () => {
@@ -25,17 +27,20 @@ export function Toolbar({ scene, camera, renderer, onToolChange }: ToolbarProps)
   useEffect(() => {
     if (!scene || !camera || !renderer) return;
 
-    // Initialize line tool with cancel callback
+    // Initialize tools with cancel callback
     lineTool.current = new LineTool(scene, camera, renderer, handleCancelDrawing);
+    rectangleTool.current = new RectangleTool(scene, camera, renderer, handleCancelDrawing);
 
     // Set up keyboard shortcuts for undo/redo
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey) {
-        if (event.key === 'z' && lineTool.current) {
+        if (event.key === 'z') {
           if (event.shiftKey) {
-            lineTool.current.redo();
+            lineTool.current?.redo();
+            rectangleTool.current?.redo();
           } else {
-            lineTool.current.undo();
+            lineTool.current?.undo();
+            rectangleTool.current?.undo();
           }
         }
       }
@@ -44,27 +49,27 @@ export function Toolbar({ scene, camera, renderer, onToolChange }: ToolbarProps)
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      if (lineTool.current) {
-        lineTool.current.disable();
-      }
+      lineTool.current?.disable();
+      rectangleTool.current?.disable();
     };
   }, [scene, camera, renderer]);
 
   const handleToolClick = (tool: Tool) => {
     setCurrentTool(tool);
-    
-    // Disable all tools first
-    if (lineTool.current) {
-      lineTool.current.disable();
-    }
-
-    // Enable selected tool
-    if (tool === 'line' && lineTool.current) {
-      lineTool.current.enable();
-    }
-
     if (onToolChange) {
       onToolChange(tool);
+    }
+
+    // Handle tool-specific initialization
+    if (tool === 'line' && lineTool.current) {
+      lineTool.current.enable();
+      if (rectangleTool.current) rectangleTool.current.disable();
+    } else if (tool === 'rectangle' && rectangleTool.current) {
+      rectangleTool.current.enable();
+      if (lineTool.current) lineTool.current.disable();
+    } else {
+      if (lineTool.current) lineTool.current.disable();
+      if (rectangleTool.current) rectangleTool.current.disable();
     }
   };
 
@@ -136,6 +141,29 @@ export function Toolbar({ scene, camera, renderer, onToolChange }: ToolbarProps)
         title="Line Tool (L) - Press ESC to cancel"
       >
         <span>📏</span>
+      </button>
+      
+      <button
+        style={{
+          width: '40px',
+          height: '40px',
+          backgroundColor: currentTool === 'rectangle' ? '#007acc' : '#3c3c3c',
+          border: 'none',
+          borderRadius: '4px',
+          color: 'white',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '20px',
+          transition: 'background-color 0.2s',
+        }}
+        onClick={() => handleToolClick('rectangle')}
+        title="Rectangle Tool (R)"
+      >
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+        </svg>
       </button>
       
       <div style={{ width: '100%', height: '1px', backgroundColor: '#3c3c3c', margin: '4px 0' }}></div>
